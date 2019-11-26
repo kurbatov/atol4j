@@ -19,18 +19,49 @@
  */
 package com.github.kurbatov.atol4j.command.common.print;
 
-import com.github.kurbatov.atol4j.command.BasicCommand;
+import com.github.kurbatov.atol4j.CashRegister;
+import com.github.kurbatov.atol4j.command.Command;
 import java.awt.image.BufferedImage;
-import static com.github.kurbatov.atol4j.command.Command.encode;
+import com.github.kurbatov.atol4j.command.Result;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Печатает картинку на кассовой ленте.
  *
  * @author Олег Курбатов &lt;o.v.kurbatov@gmail.com&gt;
  */
-public class PrintImageCommand extends BasicCommand {
+public class PrintImageCommand implements Command<Result> {
     
     private static final byte COMMAND = (byte) 0x8E;
+    
+    private static final Map<Byte, Integer> RASTER_LENGTH = new HashMap<>();
+    
+    private final int repeat;
+    
+    private final int offset;
+    
+    private final BufferedImage image;
+    
+    static {
+        RASTER_LENGTH.put((byte) 57, 72);
+        RASTER_LENGTH.put((byte) 63, 72);
+        RASTER_LENGTH.put((byte) 69, 72);
+        RASTER_LENGTH.put((byte) 81, 72);
+        RASTER_LENGTH.put((byte) 67, 48);
+        RASTER_LENGTH.put((byte) 78, 48);
+        RASTER_LENGTH.put((byte) 61, 48);
+        RASTER_LENGTH.put((byte) 75, 48);
+        RASTER_LENGTH.put((byte) 72, 48);
+        RASTER_LENGTH.put((byte) 82, 48);
+        RASTER_LENGTH.put((byte) 84, 48);
+        RASTER_LENGTH.put((byte) 80, 47);
+        RASTER_LENGTH.put((byte) 86, 47);
+        RASTER_LENGTH.put((byte) 64, 52);
+        RASTER_LENGTH.put((byte) 62, 54);
+    }
 
     /**
      * Создаёт команду печати картинки на кассовой ленте.
@@ -45,10 +76,13 @@ public class PrintImageCommand extends BasicCommand {
      * @param image картинка
      */
     public PrintImageCommand(int repeat, int offset, BufferedImage image) {
-        super(wrap(repeat, offset, image));
+        this.repeat = repeat;
+        this.offset = offset;
+        this.image = image;
     }
-    
-    private static byte[] wrap(int repeat, int offset, BufferedImage image) {
+
+    @Override
+    public CompletableFuture<Result> executeOn(CashRegister device) {
         byte[] header = new byte[] {
             COMMAND,
             1,
@@ -57,27 +91,52 @@ public class PrintImageCommand extends BasicCommand {
             (byte) (offset >>> 8),
             (byte) offset
         };
-        byte[] raster = convert(image);
-        byte[] result = new byte[header.length + raster.length];
-        System.arraycopy(header, 0, result, 0, header.length);
-        System.arraycopy(raster, 0, result, header.length, raster.length);
+        byte model = device.getDeviceType().getModel();
+        byte[] raster = new byte[RASTER_LENGTH.get(model)];
+        int maxWidth = raster.length * 8;
+        int width = image.getWidth();
+        int height = image.getHeight();
+        int padding = (maxWidth - width) / 2;
+        CompletableFuture<Result> result = CompletableFuture.completedFuture(new Result());
+        for (int i = 0; i < height; i++) {
+            int[] data = image.getRGB(0, i, width, 1, null, 0, width);
+            if (padding < 0) {
+                data = Arrays.copyOfRange(data, -padding, -padding + maxWidth);
+            } else if (padding > 0) {
+                int[] tmp = new int[data.length + padding];
+                System.arraycopy(data, 0, tmp, padding, data.length);
+                data = tmp;
+                Arrays.fill(data, 0, padding, 0xFFFFFF);
+            }
+            raster = convertRow(data, raster);
+            byte[] command = new byte[header.length + raster.length];
+            System.arraycopy(header, 0, command, 0, header.length);
+            System.arraycopy(raster, 0, command, header.length, raster.length);
+            result = result.thenCompose(r ->
+                    r.hasError() ?
+                            CompletableFuture.completedFuture(r) :
+                            device.execute(command).thenApply(b -> new Result(b))
+            );
+        }
         return result;
     }
     
-    private static byte[] convert(BufferedImage image) {
-        int[] data = image.getRGB(0, 0, image.getWidth(), image.getHeight(), null, 0, 0);
-        byte[] result = new byte[data.length / 8];
-        for (int i = 0; i < result.length; i++) {
-            int row = 0;
-            for (int j = 0; j < 8; j++) {
-                int pixel = data[i + j];
-                int brightness = (pixel & 0xFF + ((pixel >>> 8) & 0xFF) + ((pixel >>> 16) & 0xFF)) / 3;
-                int point = brightness < 128 ? 1 : 0;
-                row |= (point << (7 - j));
+    private static byte[] convertRow(int[] src, byte[] dst) {
+        for (int i = 0; i < dst.length; i++) {
+            int seq = 0;
+            for (int j = 0; j < 8 && i * 8 + j < src.length; j++) {
+                int pixel = src[i * 8 + j];
+                int point = pixelToPoint(pixel);
+                seq |= (point << (7 - j));
             }
-            result[i] = encode(row, 1)[0];
+            dst[i] = (byte) seq;
         }
-        return result;
+        return dst;
+    }
+    
+    private static int pixelToPoint(int pixel) {
+        int brightness = (pixel & 0xFF + ((pixel >>> 8) & 0xFF) + ((pixel >>> 16) & 0xFF)) / 3;
+        return brightness < 128 ? 1 : 0;
     }
     
 }
