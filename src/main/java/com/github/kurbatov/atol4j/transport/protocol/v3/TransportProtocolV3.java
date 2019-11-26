@@ -58,6 +58,8 @@ public class TransportProtocolV3 implements TransportProtocol {
     private static final byte[] EMPTY = new byte[] {};
 
     private static final int MAX_ID = 0xDF;
+    
+    private static final byte ASYNC_RESPONSE_ID = (byte) 0xF0;
 
     // флаги
     private static final byte NEED_RESULT = 1;
@@ -154,32 +156,40 @@ public class TransportProtocolV3 implements TransportProtocol {
         try {
             byte[] payload = unwrap(msg);
             if (payload.length == 0) {
+                LOGGER.warn("Получено пустое сообщение в ответ на пакет с идентификатором {}.", packId & 0xFF);
                 if (sentPackages.containsKey(packId)) { // ККТ запрашивает повтор пакета
                     //удаляем пакет из истории, чтобы избежать циклических повторов передачи
-                    transport.write(sentPackages.remove(packId));
+                    byte[] pack = sentPackages.remove(packId);
+                    LOGGER.debug("Повтор передачи пакета с идентификатором {}: {}", packId & 0xFF, pack);
+                    transport.write(pack);
                 } else {
-                    LOGGER.warn("ККТ запрашивает повтор несуществующего пакета: {}", packId);
+                    LOGGER.warn("ККТ запрашивает повтор несуществующего пакета: {}", packId & 0xFF);
                 }
                 return;
             }
             byte status = payload[0];
-            byte id = -1;
+            byte taskId = -1;
             if (status == Status.ASYNC_RESULT || status == Status.ASYNC_ERROR) {
-                id = payload[1];
+                taskId = payload[1];
                 status = status == Status.ASYNC_RESULT ? Status.RESULT : Status.ERROR;
                 payload = Arrays.copyOfRange(payload, 2, payload.length);
             } else {
                 payload = Arrays.copyOfRange(payload, 1, payload.length);
+                //TODO узнать идентификатор задания, на который получен синхронный ответ
             }
-            processResult(id, status, payload);
-            if (packId != (byte) 0xF0 && (status == Status.RESULT || status == Status.ERROR)) {
-                byte[] ack = wrap(ack(id));
+            processResult(taskId, status, payload);
+            if (status == Status.RESULT || status == Status.ERROR) {
+                byte[] ack = wrap(ack(taskId));
                 sentPackages.put(ack[3], ack);
                 transport.write(ack);
             }
         } catch (IllegalArgumentException e) {
-            LOGGER.debug("Обнаружена ошибка во входящем пакете.", e);
-            transport.write(wrap(EMPTY, packId));
+            if (packId == ASYNC_RESPONSE_ID) {
+                LOGGER.warn("Обнаружена ошибка в асинхронном ответе от устройства: {}", msg, e);
+            } else {
+                LOGGER.debug("Обнаружена ошибка во входящем пакете.", e);
+                transport.write(wrap(EMPTY, packId));
+            }
         }
     }
 
@@ -230,21 +240,19 @@ public class TransportProtocolV3 implements TransportProtocol {
                 }
             }
         }
-        crc = 0xFF & crc;
-        if (crc == STX) {
+        byte calculatedCRC = (byte) (0xFF & crc);
+        if (calculatedCRC == STX || calculatedCRC == ESC) {
             byte[] temp = new byte[result.length + 1];
             System.arraycopy(result, 0, temp, 0, result.length);
             result = temp;
             result[result.length - 2] = ESC;
-            result[result.length - 1] = TSTX;
-        } else if (crc == ESC) {
-            byte[] temp = new byte[result.length + 1];
-            System.arraycopy(result, 0, temp, 0, result.length);
-            result = temp;
-            result[result.length - 2] = ESC;
-            result[result.length - 1] = TESC;
+            if (calculatedCRC == STX) {
+                result[result.length - 1] = TSTX;
+            } else {
+                result[result.length - 1] = TESC;
+            }
         } else {
-            result[result.length - 1] = (byte) crc;
+            result[result.length - 1] = calculatedCRC;
         }
         return result;
     }
@@ -252,7 +260,7 @@ public class TransportProtocolV3 implements TransportProtocol {
     static byte[] unwrap(byte[] r) {
         int len = (r[1] & 0x7F) | (r[2] << 7);
         int actualLen = r.length - 5;
-        for (int i = 4; i < r.length - 2; i++) {
+        for (int i = 4; i < r.length - 1; i++) {
             if (r[i] == ESC) {
                 actualLen--;
             }
@@ -263,9 +271,6 @@ public class TransportProtocolV3 implements TransportProtocol {
         byte[] result = new byte[len];
         byte id = r[3];
         int crc = CRC8INIT ^ (0xFF & id);
-        if (len == 0) {
-            LOGGER.warn("Получено пустое сообщение в ответ на пакет с идентификатором {}.", id);
-        }
         for (int k = 0; k < 8; k++) {
             if ((crc & 0x80) == 128) {
                 crc = (crc << 1) ^ CRC8POLY;
@@ -293,10 +298,10 @@ public class TransportProtocolV3 implements TransportProtocol {
                 }
             }
         }
-        crc = 0xFF & crc;
-        int expectedCRC = 0xFF & r[r.length - 1];
-        if (crc != expectedCRC && (expectedCRC == TSTX ^ crc != STX) && (expectedCRC == TESC ^ crc != ESC)) {
-            throw new IllegalArgumentException(String.format("Неверная контрольная сумма. Указано: %d. Получено: %d.", expectedCRC, crc));
+        byte calculatedCRC = (byte) (0xFF & crc);
+        int expectedCRC = r[r.length - 1];
+        if (calculatedCRC != expectedCRC && ((expectedCRC == TSTX && calculatedCRC != STX) || (expectedCRC == TESC && calculatedCRC != ESC))) {
+            throw new IllegalArgumentException(String.format("Неверная контрольная сумма. Указано: %d. Получено: %d.", expectedCRC, calculatedCRC));
         }
         return result;
     }
@@ -313,11 +318,18 @@ public class TransportProtocolV3 implements TransportProtocol {
         byte[] result = new byte[task.length + 3];
         result[0] = Command.ADD;
         result[1] = flags;
-        result[2] = (byte) (id & MAX_ID);
+        result[2] = (byte) id;
         System.arraycopy(task, 0, result, 3, task.length);
         return result;
     }
     
+    /**
+     * Формирует сообщение с подтверждением успешного получения пакета с
+     * указанным идентификатором.
+     *
+     * @param id идентификатор успешного пакета
+     * @return сообщение с подтверждением
+     */
     byte[] ack(byte id) {
         return new byte[] {Command.ACK, id};
     }
@@ -328,9 +340,11 @@ public class TransportProtocolV3 implements TransportProtocol {
         }
         CompletableFuture<byte[]> future = pendingCommands.get(id);
         if (future == null) {
-            LOGGER.warn("Получен результат для несуществующей команды {}. {}: {}", id, status, Arrays.toString(msg));
-        } else if (!future.isDone()) {
-            LOGGER.debug("Обновлён статус команды {}: {}", id, status);
+            LOGGER.warn("Получен результат для несуществующей команды {}. {}: {}", id & 0xFF, status, Arrays.toString(msg));
+        } else if (future.isDone()) {
+            LOGGER.warn("Получен результат для уже завершённой команды {}. Игнорируем.", id & 0xFF);
+        } else {
+            LOGGER.debug("Обновлён статус команды {}: {}", id & 0xFF, status);
             executor.execute(() -> future.complete(msg));
         }
     }

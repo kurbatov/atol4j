@@ -19,6 +19,7 @@
  */
 package com.github.kurbatov.atol4j.transport.protocol.v3;
 
+import com.github.kurbatov.atol4j.command.Result;
 import com.github.kurbatov.atol4j.transport.Transport;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
@@ -36,22 +37,47 @@ public class TransportProtocolV3Test {
     
     @Test
     public void wrapTest() {
-        byte[] data = new byte[] {};
+        byte[] data = {};
         byte[] frame = protocol.wrap(data);
-        assertEquals(new byte[] {STX, 0, 0, 1, (byte) 0x9D}, frame);
+        assertEquals(frame, new byte[] {STX, 0, 0, 1, (byte) 0x9D});
     }
     
+    @Test
     public void unwrapTest() {
-        byte[] data = new byte[] {STX, 0, 0, 1, (byte) 0x9D};
+        byte[] data = {STX, 0, 0, 1, (byte) 0x9D};
         byte[] frame = protocol.unwrap(data);
-        assertEquals(new byte[] {}, frame);
+        assertEquals(frame, new byte[] {});
+    }
+    
+    @Test
+    public void unwrapWithEscapeTest() {
+        byte[] data = {STX, 5, 0, (byte) 0xF0, Status.ASYNC_RESULT, 87, Result.RESPONSE_CODE, 0, 0, ESC, TSTX};
+        byte[] frame = protocol.unwrap(data);
+        assertEquals(frame, new byte[] {Status.ASYNC_RESULT, 87, Result.RESPONSE_CODE, 0, 0});
     }
     
     @Test
     public void wrapUnwrapTest() {
-        byte[] data = new byte[] {0x1F, 0x00, (byte) 0xFF, 0x10, 0x02, 0x03, 0x1A};
+        byte[] data = {0x1F, 0x00, (byte) 0xFF, 0x10, 0x02, 0x03, 0x1A};
         byte[] frame = protocol.wrap(data);
-        assertEquals(data, protocol.unwrap(frame), "Unwrapped data should match the original");
+        assertEquals(protocol.unwrap(frame), data, "Unwrapped data should match the original");
+    }
+    
+    @Test(dependsOnMethods = {"wrapTest", "wrapUnwrapTest"})
+    public void idIncreasesTest() {
+        byte[] data = {};
+        int baseId = 3;
+        for (int i = 0; i <= 220; i++) {
+            byte[] frame = protocol.wrap(data);
+            assertEquals(frame[3] & 0xFF, baseId + i);
+        }
+    }
+    
+    @Test(dependsOnMethods = "idIncreasesTest")
+    public void maxIdTest() {
+        byte[] data = {};
+        byte[] frame = protocol.wrap(data);
+        assertEquals(frame[3], 0);
     }
     
     private static class TransportStub implements Transport {
