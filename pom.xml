@@ -3,7 +3,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.github.kurbatov</groupId>
     <artifactId>atol4j</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1-SNAPSHOT</version>
     <packaging>jar</packaging>
     <name>atol4j</name>
     <description>atol4j is unofficial client library for Atol cash machines.</description>
@@ -26,7 +26,7 @@
         <url>https://github.com/kurbatov/atol4j</url>
         <connection>scm:git:git@github.com:kurbatov/atol4j.git</connection>
         <developerConnection>scm:git:git@github.com:kurbatov/atol4j.git</developerConnection>
-        <tag>atol4j-0.1.0</tag>
+        <tag>HEAD</tag>
     </scm>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
