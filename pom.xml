@@ -3,7 +3,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.github.kurbatov</groupId>
     <artifactId>atol4j</artifactId>
-    <version>0.0.0-SNAPSHOT</version>
+    <version>0.1.0</version>
     <packaging>jar</packaging>
     <name>atol4j</name>
     <description>atol4j is unofficial client library for Atol cash machines.</description>
@@ -26,7 +26,7 @@
         <url>https://github.com/kurbatov/atol4j</url>
         <connection>scm:git:git@github.com:kurbatov/atol4j.git</connection>
         <developerConnection>scm:git:git@github.com:kurbatov/atol4j.git</developerConnection>
-        <tag>HEAD</tag>
+        <tag>atol4j-0.1.0</tag>
     </scm>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -40,7 +40,7 @@
             <groupId>org.scream3r</groupId>
             <artifactId>jssc</artifactId>
             <version>${jssc.version}</version>
-            <optional/>
+            <optional />
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
