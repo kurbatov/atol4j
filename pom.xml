@@ -10,7 +10,7 @@
     <url>https://github.com/kurbatov/atol4j</url>
     <licenses>
         <license>
-            <name>MIT License</name>
+            <name>GNU GPLv3</name>
             <url>https://raw.github.com/kurbatov/atol4j/master/LICENSE</url>
             <distribution>repo</distribution>
         </license>
